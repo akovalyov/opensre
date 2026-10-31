@@ -8,7 +8,9 @@ usage-based API key auth as well as ``codex login`` sessions.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
+import threading
 
 from config.account import account_llm_route, hosted_openai_env
 from config.constants.account import OPENSRE_ACTOR_HEADER, OPENSRE_ACTOR_HEADER_ENV
@@ -137,6 +139,45 @@ def _should_probe_codex_login_status() -> bool:
     return os.environ.get(_AUTH_STATUS_PROBE_ENV, "").strip().lower() in _TRUTHY_ENV_VALUES
 
 
+CODEX_RESUME_ENV = "OPENSRE_CODEX_RESUME"
+_SESSION_ID_RE = re.compile(r"session id:\s*([0-9a-fA-F-]{36})")
+_MAX_SESSIONS = 4
+_sessions_lock = threading.Lock()
+#: (session id, the full prompt that session has answered), newest last.
+#:
+#: Every ``codex exec`` is a new session, and the Responses API keys its prompt cache by
+#: session, so a tool loop that re-sends its whole history on each step is cached only for
+#: Codex's own instructions. Resuming the session that already answered a prompt's prefix
+#: sends only the new tail and keeps that prefix cached.
+_sessions: list[tuple[str, str]] = []
+_pending: dict[int, str] = {}
+
+
+def _resume_enabled() -> bool:
+    return os.environ.get(CODEX_RESUME_ENV, "").strip().lower() in {"1", "true", "yes"}
+
+
+def _resumable(prompt: str) -> tuple[str, str] | None:
+    """The session whose answered prompt is the longest strict prefix of ``prompt``."""
+    with _sessions_lock:
+        candidates = [s for s in _sessions if len(prompt) > len(s[1]) and prompt.startswith(s[1])]
+    return max(candidates, key=lambda s: len(s[1]), default=None)
+
+
+def _remember(session_id: str, prompt: str) -> None:
+    with _sessions_lock:
+        _sessions[:] = [s for s in _sessions if s[0] != session_id]
+        _sessions.append((session_id, prompt))
+        del _sessions[:-_MAX_SESSIONS]
+
+
+def reset_resumable_sessions() -> None:
+    """Forget every session; for tests and for callers that start an unrelated conversation."""
+    with _sessions_lock:
+        _sessions.clear()
+        _pending.clear()
+
+
 class CodexAdapter:
     """Non-interactive Codex CLI (`codex exec` with read-only sandbox)."""
 
@@ -254,17 +295,23 @@ class CodexAdapter:
         if workspace:
             ws = workspace
 
-        argv: list[str] = [
-            binary,
-            "exec",
-            "--ephemeral",
-            "-s",
-            _READ_ONLY_SANDBOX,
-            "--color",
-            "never",
-            "-C",
-            ws,
-        ]
+        resume = _resume_enabled()
+        resumed = _resumable(prompt) if resume else None
+        if resumed is not None:
+            # `exec resume` takes no --sandbox or -C: the sandbox comes from config and the
+            # directory from the subprocess cwd.
+            argv: list[str] = [
+                binary,
+                "exec",
+                "resume",
+                resumed[0],
+                "-c",
+                f'sandbox_mode="{_READ_ONLY_SANDBOX}"',
+            ]
+        else:
+            # A session is kept on disk only when it may be resumed later.
+            argv = [binary, "exec", *([] if resume else ["--ephemeral"])]
+            argv.extend(["-s", _READ_ONLY_SANDBOX, "--color", "never", "-C", ws])
         if skip_git:
             argv.append("--skip-git-repo-check")
 
@@ -292,16 +339,26 @@ class CodexAdapter:
 
         argv.append("-")
 
+        if resume:
+            with _sessions_lock:
+                _pending[threading.get_ident()] = prompt
+
         return CLIInvocation(
             argv=tuple(argv),
-            stdin=prompt,
+            stdin=prompt if resumed is None else prompt[len(resumed[1]) :],
             cwd=ws,
             env=oai or None,
             timeout_sec=self.default_exec_timeout_sec,
         )
 
     def parse(self, *, stdout: str, stderr: str, returncode: int) -> str:
-        return require_nonempty_output(stdout, stderr, returncode, self.explain_failure)
+        content = require_nonempty_output(stdout, stderr, returncode, self.explain_failure)
+        with _sessions_lock:
+            prompt = _pending.pop(threading.get_ident(), None)
+        match = _SESSION_ID_RE.search(stderr or "")
+        if match and prompt is not None:
+            _remember(match.group(1), prompt)
+        return content
 
     def explain_failure(self, *, stdout: str, stderr: str, returncode: int) -> str:
         from integrations.llm_cli.failure_explain import explain_cli_failure
