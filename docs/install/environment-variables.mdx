@@ -202,6 +202,7 @@ Want credentials only from the environment, never on disk? Set
 | --- | --- | --- |
 | `CODEX_BIN` |  | Path to Codex CLI binary |
 | `CODEX_MODEL` |  | Model override for Codex |
+| `OPENSRE_CODEX_RESUME` |  | Set to `1` to continue one Codex session across the steps of an investigation instead of starting a new session per step. Each step then sends only its new messages, and the earlier ones stay in the prompt cache. Sessions are kept in `CODEX_HOME` |
 
 
   </Accordion>

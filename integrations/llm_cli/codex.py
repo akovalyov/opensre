@@ -14,6 +14,7 @@ import threading
 
 from config.account import account_llm_route, hosted_openai_env
 from config.constants.account import OPENSRE_ACTOR_HEADER, OPENSRE_ACTOR_HEADER_ENV
+from config.constants.coding_agent import CODEX_RESUME_ENV
 from config.constants.llm import OPENAI_API_KEY_ENV
 from integrations.llm_cli.base import CLIInvocation, CLIProbe
 from integrations.llm_cli.binary_resolver import (
@@ -139,7 +140,6 @@ def _should_probe_codex_login_status() -> bool:
     return os.environ.get(_AUTH_STATUS_PROBE_ENV, "").strip().lower() in _TRUTHY_ENV_VALUES
 
 
-CODEX_RESUME_ENV = "OPENSRE_CODEX_RESUME"
 _SESSION_ID_RE = re.compile(r"session id:\s*([0-9a-fA-F-]{36})")
 _MAX_SESSIONS = 4
 _sessions_lock = threading.Lock()

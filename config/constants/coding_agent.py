@@ -15,10 +15,14 @@ CODING_AGENT_SANDBOX_HOST = "host"
 CODEX_HOME_ENV = "CODEX_HOME"
 #: Name prefix of the per-run temporary ``CODEX_HOME`` a hosted-route run gets.
 CODEX_ISOLATED_HOME_PREFIX = "opensre-codex-home-"
+#: ``1`` resumes the Codex session that already answered a prompt's prefix instead of
+#: starting a new one per call, so a tool loop keeps its history in the prompt cache.
+CODEX_RESUME_ENV = "OPENSRE_CODEX_RESUME"
 
 __all__ = [
     "CODEX_HOME_ENV",
     "CODEX_ISOLATED_HOME_PREFIX",
+    "CODEX_RESUME_ENV",
     "CODING_AGENT_SANDBOX_AGENT",
     "CODING_AGENT_SANDBOX_ENV",
     "CODING_AGENT_SANDBOX_HOST",
